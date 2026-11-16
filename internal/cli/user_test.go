@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -19,6 +20,7 @@ func TestUserMutations(t *testing.T) {
 		{[]string{"user", "migrate", "ada", "--to=shared-b"}, adminRequest{Method: http.MethodPost, Path: prefix + "u-ada/migrate", Body: map[string]any{"to": "shared-b"}}},
 		{[]string{"user", "migrate", "ada", "--to=shared-b", "--source-transfer=retained-pod"}, adminRequest{Method: http.MethodPost, Path: prefix + "u-ada/migrate", Body: map[string]any{"to": "shared-b", "sourceTransfer": "retained-pod"}}},
 		{[]string{"user", "migrate", "ada", "--to-isolated=standard"}, adminRequest{Method: http.MethodPost, Path: prefix + "u-ada/isolated-gateway", Body: map[string]any{"sizingProfile": "standard"}}},
+		{[]string{"user", "restore-serving", "ada"}, adminRequest{Method: http.MethodPost, Path: prefix + "u-ada/restore-serving"}},
 		{[]string{"user", "unassign", "ada"}, adminRequest{Method: http.MethodPost, Path: prefix + "u-ada/unassign"}},
 		{[]string{"user", "replace-vm", "grace"}, adminRequest{Method: http.MethodPost, Path: prefix + "u-grace/vm/replace", Body: map[string]any{}}},
 		{[]string{"user", "delete", "alan"}, adminRequest{Method: http.MethodPost, Path: prefix + "u-alan/delete", Body: map[string]any{"eraseNow": false}}},
@@ -117,6 +119,54 @@ func TestUserMigrateToIsolatedRefusalExitsNonZero(t *testing.T) {
 	run := fleetWith(t, fixture, runOptions{refuseDryRunWith: http.StatusConflict}, "user", "migrate", "ada", "--to-isolated=standard")
 	expectRefused(t, run)
 	expectContains(t, run.stderr, "would refuse this request (409)")
+}
+
+func TestUserRestoreServingRefusalNamesTheReasonCode(t *testing.T) {
+	notStranded := runOptions{refuseDryRunWith: http.StatusConflict, errorCode: "precondition-failed", errorReason: "source-not-stranded", errorMessage: "ada is serving on shared-a"}
+	checked := fleetWith(t, fixture, notStranded, "user", "restore-serving", "ada")
+	expectRefused(t, checked)
+	expectContains(t, checked.stderr, "would refuse this request (409 precondition-failed, reason source-not-stranded): ada is serving on shared-a")
+	expectContains(t, checked.stderr, "nothing was changed")
+
+	inFlight := runOptions{refuseApplyWith: http.StatusConflict, errorCode: "precondition-failed", errorReason: "migration-in-flight"}
+	applied := fleetWith(t, fixture, inFlight, "user", "restore-serving", "ada", "--apply")
+	if applied.exit == 0 {
+		t.Fatalf("expected a non-zero exit:\n%s", applied.stdout)
+	}
+	expectContains(t, applied.stderr, "refused this request (409 precondition-failed, reason migration-in-flight): a migration is in flight for this gateway")
+}
+
+func TestUserRestoreServingSaysWhenTheSourceGatewayDidNotResumeTheUser(t *testing.T) {
+	cases := map[int]string{
+		http.StatusBadGateway:         "the gateway answered the resume with an error; nothing was changed",
+		http.StatusServiceUnavailable: "the gateway could not be reached; nothing was changed",
+	}
+	for status, want := range cases {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			options := runOptions{refuseApplyWith: status, errorCode: "source-resume-failed", errorMessage: "resume of ada on shared-a failed"}
+			run := fleetWith(t, fixture, options, "user", "restore-serving", "ada", "--apply")
+			if run.exit == 0 {
+				t.Fatalf("expected a non-zero exit:\n%s", run.stdout)
+			}
+			expectContains(t, run.stderr, "the source gateway could not resume ada ("+strconv.Itoa(status)+" source-resume-failed): resume of ada on shared-a failed")
+			expectContains(t, run.stderr, want)
+			expectContains(t, run.stderr, "octogee-fleet --env=local user restore-serving ada --apply")
+			if strings.Contains(run.stderr, "the Admin API failed") || strings.Contains(run.stdout, "applied") {
+				t.Fatalf("reported as an Admin API failure or as applied:\nstdout=%s\nstderr=%s", run.stdout, run.stderr)
+			}
+		})
+	}
+}
+
+func TestUserRestoreServingReportsAnotherServerFailureAsTheAdminAPIs(t *testing.T) {
+	run := fleetWith(t, fixture, runOptions{refuseApplyWith: http.StatusServiceUnavailable}, "user", "restore-serving", "ada", "--apply")
+	if run.exit == 0 {
+		t.Fatalf("expected a non-zero exit:\n%s", run.stdout)
+	}
+	expectContains(t, run.stderr, "the Admin API failed (503)")
+	if strings.Contains(run.stderr, "nothing was changed") {
+		t.Fatalf("claimed nothing was changed without the gateway's failure code:\n%s", run.stderr)
+	}
 }
 
 func TestUserReplaceVMRequiresBothBreakGlassFlags(t *testing.T) {

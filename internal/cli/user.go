@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 
 	"github.com/octogee-ai/octogee-fleet/internal/admin"
@@ -53,6 +54,11 @@ var userCommands = []*command{
 		mutating: true,
 		examples: []string{"ada --to=shared-b", "ada --to-isolated=standard --apply"},
 		run:      userMigrate,
+	},
+	{
+		path: words("user restore-serving"), usage: "<user>", argc: 1, summary: "Return a user to serving after a failed move left them quiescing.", mutating: true,
+		examples: []string{"ada", "ada --apply"},
+		run:      userRestoreServing,
 	},
 	{
 		path: words("user unassign"), usage: "<user>", argc: 1, summary: "Remove a user's placement.", mutating: true,
@@ -336,6 +342,33 @@ func (i *invocation) userAndTarget() (placedUser, gatewaySummary, error) {
 		return placedUser{}, gatewaySummary{}, fmt.Errorf("gateway %q is %s, not running", target.GatewayID, target.DesiredStatus)
 	}
 	return user, target, nil
+}
+
+const sourceResumeFailed = "source-resume-failed"
+
+func userRestoreServing(i *invocation) error {
+	user, err := i.namedUser()
+	if err != nil {
+		return err
+	}
+	done := user.Name + " returned to serving"
+	if user.AssignedGatewayID != "" {
+		done += " on " + user.AssignedGatewayID
+	}
+	err = i.apply(change{request: post(admin.Path("users", user.ID, "restore-serving"), nil), done: done})
+	var failed *admin.HTTPError
+	if !errors.As(err, &failed) || failed.Code != sourceResumeFailed {
+		return err
+	}
+	cause := "the gateway answered the resume with an error"
+	if failed.Status == http.StatusServiceUnavailable {
+		cause = "the gateway could not be reached"
+	}
+	return advise(
+		fmt.Errorf("the source gateway could not resume %s (%s): %s", user.Name, failed.Label(), failed.Message),
+		cause+"; nothing was changed",
+		"once the gateway answers, run this again: "+i.command("user restore-serving "+i.args[0]+" --apply"),
+	)
 }
 
 func userUnassign(i *invocation) error {

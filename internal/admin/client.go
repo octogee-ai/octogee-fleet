@@ -73,19 +73,26 @@ func Path(segments ...string) string {
 }
 
 // HTTPError is a non-2xx Admin API response. Code is the server's
-// machine-readable reason, when it gave one.
+// machine-readable reason, when it gave one, and Reason is the reason code
+// that narrows it.
 type HTTPError struct {
 	Status  int
 	Code    string
+	Reason  string
 	Message string
 }
 
-// Label is the status and the server's code, such as "409 user-not-active".
+// Label is the status and the server's code, such as "409 user-not-active",
+// followed by its reason code when it gave one.
 func (e *HTTPError) Label() string {
-	if e.Code == "" {
-		return strconv.Itoa(e.Status)
+	label := strconv.Itoa(e.Status)
+	if e.Code != "" {
+		label += " " + e.Code
 	}
-	return fmt.Sprintf("%d %s", e.Status, e.Code)
+	if e.Reason != "" {
+		label += ", reason " + e.Reason
+	}
+	return label
 }
 
 func (e *HTTPError) Error() string {
@@ -205,8 +212,9 @@ func (c *Client) open(ctx context.Context, request Request) (*http.Response, err
 	if readErr != nil {
 		return nil, fmt.Errorf("read the Admin API error: %w", readErr)
 	}
-	code, message := errorBody(data)
-	return nil, &HTTPError{Status: response.StatusCode, Code: code, Message: message}
+	failure := errorBody(data)
+	failure.Status = response.StatusCode
+	return nil, failure
 }
 
 func (c *Client) build(ctx context.Context, request Request) (*http.Request, error) {
@@ -252,13 +260,14 @@ func (c *Client) bearer(ctx context.Context) (string, error) {
 	return token, nil
 }
 
-func errorBody(data []byte) (code, message string) {
+func errorBody(data []byte) *HTTPError {
 	var payload struct {
-		Code  string `json:"code"`
-		Error string `json:"error"`
+		Code       string `json:"code"`
+		ReasonCode string `json:"reasonCode"`
+		Error      string `json:"error"`
 	}
 	if err := json.Unmarshal(data, &payload); err == nil && payload.Error != "" {
-		return payload.Code, payload.Error
+		return &HTTPError{Code: payload.Code, Reason: payload.ReasonCode, Message: payload.Error}
 	}
-	return "", strings.TrimSpace(string(data))
+	return &HTTPError{Message: strings.TrimSpace(string(data))}
 }

@@ -8,7 +8,7 @@ The bearer is an ID token from an OpenID Connect issuer the platform trusts, whi
 
 ## Errors
 
-A failed request returns a non-2xx status with `{"error": "<message>"}`, and a machine-readable `code` where the route has one. `401` means the token is missing, expired or not from a trusted issuer. `403` means the identity may not do this, such as one without the operator role. `octogee-fleet` prints the status and `code` with the message.
+A failed request returns a non-2xx status with `{"error": "<message>"}`, and a machine-readable `code` where the route has one. A refusal may also carry a `reasonCode` that narrows the `code`. `401` means the token is missing, expired or not from a trusted issuer. `403` means the identity may not do this, such as one without the operator role. `octogee-fleet` prints the status, `code` and `reasonCode` with the message.
 
 ## Mutations
 
@@ -205,6 +205,35 @@ Takes `{"sizingProfile": "<name>"}`. Creates the user's isolated gateway at that
 ```
 
 A dry run answers with one plan whose `mutation` carries `uid`, `sizingProfile` and `fromGatewayId`. Refusals carry `{"code": "<code>", "error": "<message>"}`, on a dry run as well as when applied. `400` means the sizing profile is unknown. `404` with `user-not-found` means the user does not exist. `409` with `user-has-isolated-gateway` means the user already has one, named by `gatewayId`; `isolated-gateway-retiring`, `user-not-provisioned` and `user-not-active` are also `409`.
+
+## `POST /users/<id>/restore-serving`
+
+Takes no body. Finishes the rollback of a failed move that could not resume the user on its source gateway. Such a move leaves the user quiescing there with no move in flight, so the user gets no answer. The Admin API checks that the user is in that state and asks the source gateway to resume them. Only when the gateway confirms does it mark the user serving. Returns `200`:
+
+```json
+{ "uid": "u-ada", "slug": "ada", "gatewayId": "shared-a", "targetGatewayId": "shared-b", "state": "serving", "failedMoveId": "<id>", "operationId": "<id>" }
+```
+
+`gatewayId` is the source gateway, and `targetGatewayId` is the gateway the failed move was headed to. `operationId` is the audit of the repair. `failedMoveId` is the operation of the failed move; its name does not end in `OperationId` because the repair did not start it.
+
+A dry run makes the same checks and does not ask the gateway. It answers with one plan, or with the `404` or `409` of the real request.
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| `404` | | The user does not exist, or this Admin API does not have the route. |
+| `409` | `precondition-failed` | A check does not hold. `reasonCode` names it, as below. |
+| `502` | `source-resume-failed` | The source gateway answered the resume with an error. Nothing was changed. |
+| `503` | `source-resume-failed` | The source gateway could not be reached. Nothing was changed. |
+
+| `reasonCode` | Meaning |
+| --- | --- |
+| `user-missing` | The user does not exist. |
+| `source-not-stranded` | The user is not quiescing on a gateway that a failed move of theirs left closed. A repeat after a repair answers this. |
+| `migration-in-flight` | The failed move is pending or running again, or another operation for the user or for the source gateway is. |
+| `rollback-not-proven` | The failed move may have taken effect on its target, or its recorded steps do not show that it unmounted the target and had only the source left to resume. |
+| `fleet-state-changed` | The user's placement does not match the failed move, or it changed during the call. |
+
+A `409` changes no record. When the check fails only after the gateway resumed the user, the user stays quiescing and the request can be repeated.
 
 ## Sizing profiles
 
