@@ -133,6 +133,7 @@ type runOptions struct {
 	errorMessage     string
 	detailsPause     time.Duration
 	chatPassword     string
+	alterApplied     func(answer map[string]any)
 }
 
 type fleetRun struct {
@@ -305,6 +306,9 @@ func (s *adminStub) serveMutation(w http.ResponseWriter, r *http.Request) {
 	}
 	if !strings.HasSuffix(r.URL.Path, "/one-time-passwords") {
 		status, body := appliedAnswer(r)
+		if s.options.alterApplied != nil {
+			s.options.alterApplied(body)
+		}
 		if s.options.omitOperationIDs {
 			for name := range body {
 				if name == "operationId" || strings.HasSuffix(name, "OperationId") {
@@ -341,6 +345,7 @@ func appliedAnswer(r *http.Request) (int, map[string]any) {
 		return http.StatusOK, map[string]any{
 			"uid": segments[1], "slug": "ada", "gatewayId": "shared-a", "targetGatewayId": "shared-b",
 			"state": "serving", "failedMoveId": "op-failed-move", "operationId": "audit-restore",
+			"schedulesRestored": true, "sourceDraining": false,
 		}
 	case strings.HasSuffix(path, "/delete"):
 		return http.StatusAccepted, map[string]any{

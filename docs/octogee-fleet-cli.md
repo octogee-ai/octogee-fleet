@@ -81,11 +81,20 @@ A shared gateway stays on the build it was added on, and the Admin API refuses `
 | `user assign <user> --to=<gateway>` | Places a user who has no gateway. Refuses a parked gateway and another user's isolated gateway. | `POST /users/<id>/assign` |
 | `user migrate <user> --to=<gateway> [--source-transfer=retained-pod]` | Moves a placed user to another gateway as a journaled migration | `POST /users/<id>/migrate` |
 | `user migrate <user> --to-isolated=<sizing profile>` | Moves a placed user to an isolated gateway that does not exist yet. The Admin API creates it for the user at the sizing profile and queues the migration. Takes exactly one of `--to` and `--to-isolated`. Once the user has an isolated gateway, move them back to it with `--to=<gateway>`. | `POST /users/<id>/isolated-gateway` |
-| `user restore-serving <user>` | Returns a user to serving on their source gateway after a move failed and its rollback could not resume them. That leaves the user quiescing with no move in flight, and the user gets no answer. The Admin API refuses, with a reason code, a user who is not in that state. The dry run makes the same checks without asking the gateway to resume the user. If the gateway does not resume them, the command says so and nothing is changed. | `POST /users/<id>/restore-serving` |
+| `user restore-serving <user>` | Returns a user to serving on their source gateway after a move failed and its rollback could not resume them. See [below](#returning-a-user-to-serving). | `POST /users/<id>/restore-serving` |
 | `user unassign <user>` | Removes a user's placement | `POST /users/<id>/unassign` |
 | `user replace-vm <user> [--force --accept-boot-data-loss]` | Replaces the VM of the user's isolated gateway | `POST /users/<id>/vm/replace` |
 | `user delete <user> [--erase-now]` | Schedules the user's deletion; `--erase-now` erases at once | `POST /users/<id>/delete` |
 | `user broker <user>` | Shows the user's model broker usage by window; `--format=json` adds daily usage by model, the token breakdown and recent calls | `GET /users/<id>/broker-diagnostics` |
+
+### Returning a user to serving
+
+A move that fails after it closed its source rolls back by resuming the user on the source gateway. When that resume fails too, the user is left quiescing with no move in flight and gets no answer. `user restore-serving` repairs that one case.
+
+- **Refusals.** The Admin API refuses, with a reason code, a user who is not in that state, a user whose account is not active, and a source gateway that is retired. [The Admin API contract](admin-api.md#post-usersidrestore-serving) lists the reason codes. The dry run makes the same checks without asking the gateway to resume the user.
+- **A gateway that does not resume the user.** The command says so, and nothing is changed. Run it again once the gateway answers, without `--idempotency-key` or with a new key: the Admin API answers a repeat of a used key with `409` and does not ask the gateway again.
+- **Scheduled work.** The repair also restores the scheduled work the failed move took off the source. If that fails, the user still serves again, and the command warns that their scheduled work was not restored and needs attention. `octogee-fleet` has no command to restore it.
+- **A draining gateway.** If the source gateway is draining, the user serves again on a gateway that is being emptied, and nothing moves them off it automatically. The command warns about it and prints the command to move them: `user migrate <user> --to=<gateway>`, with a gateway you choose.
 
 ## Sizing profile commands
 
