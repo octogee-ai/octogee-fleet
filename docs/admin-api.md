@@ -219,9 +219,20 @@ Takes no body. Finishes the rollback of a failed move that could not resume the 
 
 `gatewayId` is the source gateway, and `targetGatewayId` is the gateway the failed move was headed to. `operationId` is the audit of the repair. `failedMoveId` is the operation of the failed move; its name does not end in `OperationId` because the repair did not start it.
 
-`schedulesRestored` says what became of the scheduled work the failed move took off the source: `true` when it is back on the source, `"none"` when the move took none, and `false` when restoring it failed. A failed restore does not hold the repair back, so the user serves again without that scheduled work, and `octogee-fleet` warns about it.
+`schedulesRestored` says what became of the scheduled work the failed move took off the source:
+
+| Value | Meaning |
+| --- | --- |
+| `true` | It is back on the source. |
+| `"none"` | The failed move took none. |
+| `false` | Restoring it failed. `octogee-fleet` warns that it was not restored and needs attention. |
+| `"unknown"` | The failed move stopped while it was taking the scheduled work off the source and kept no record of it, so some scheduled jobs may be left disabled. `octogee-fleet` warns that it needs checking. |
+
+Neither `false` nor `"unknown"` holds the repair back: the user serves again. A repeat of the request then answers `source-not-stranded`, and the Admin API has no route that restores scheduled work later. `octogee-fleet` warns about any other value too, and names it.
 
 `sourceDraining` is `true` when the source gateway is draining. The user then serves again on a gateway that is being emptied, and nothing moves them off it automatically. `octogee-fleet` warns about it and prints the `user migrate` command to move them.
+
+The Admin API answers after its calls to the gateway: the resume and, when there is scheduled work to restore, the restore. It waits up to a minute on each, so a request can take about two minutes. `octogee-fleet` waits three minutes for this answer.
 
 A dry run makes the same checks and does not ask the gateway. It answers with one plan, or with the `404` or `409` of the real request.
 
@@ -241,6 +252,7 @@ A dry run makes the same checks and does not ask the gateway. It answers with on
 | `fleet-state-changed` | The user's placement does not match the failed move, or it changed during the call. |
 | `account-not-active` | The user's account is suspended, scheduled for deletion or being erased, so the user is not served. |
 | `source-gateway-retired` | The source gateway is retired, so it cannot resume the user. |
+| `source-gateway-paused` | The source gateway is paused. The request can be repeated once the gateway is resumed. |
 
 A `409` changes no record. When the check fails only after the gateway resumed the user, the user stays quiescing and the request can be repeated.
 

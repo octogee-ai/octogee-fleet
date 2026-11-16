@@ -4,6 +4,7 @@ package admin
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -33,13 +34,15 @@ type Doer interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
-// Request is one Admin API call. A nil Body sends no body at all.
+// Request is one Admin API call. A nil Body sends no body at all. Timeout is
+// how long Send waits for the answer; zero waits the default two minutes.
 type Request struct {
 	Method         string
 	Path           string
 	Query          url.Values
 	Body           map[string]any
 	IdempotencyKey string
+	Timeout        time.Duration
 }
 
 // Target is the request's path and query, as shown to the operator.
@@ -148,7 +151,7 @@ func (c *Client) observe(header http.Header) {
 
 // Send performs a request and returns the response body.
 func (c *Client) Send(ctx context.Context, request Request) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	ctx, cancel := context.WithTimeout(ctx, cmp.Or(request.Timeout, requestTimeout))
 	defer cancel()
 	response, err := c.open(ctx, request)
 	if err != nil {

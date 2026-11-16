@@ -137,7 +137,7 @@ func TestUserRestoreServingRefusalNamesTheReasonCode(t *testing.T) {
 }
 
 func TestUserRestoreServingNamesEveryReasonTheAdminAPIRefusesWith(t *testing.T) {
-	for _, reason := range []string{"account-not-active", "source-gateway-retired"} {
+	for _, reason := range []string{"account-not-active", "source-gateway-retired", "source-gateway-paused"} {
 		t.Run(reason, func(t *testing.T) {
 			options := runOptions{refuseApplyWith: http.StatusConflict, errorCode: "precondition-failed", errorReason: reason, errorMessage: "ada cannot be returned to serving"}
 			run := fleetWith(t, fixture, options, "user", "restore-serving", "ada", "--apply")
@@ -155,6 +155,7 @@ func restoredWith(field string, value any) runOptions {
 
 const (
 	schedulesNotRestored = "ada is serving again, but their scheduled work was not restored and needs attention"
+	schedulesUnknown     = "ada is serving again, but their scheduled work may have been left disabled and needs checking"
 	sourceIsDraining     = "shared-a is draining, and nothing will move ada off it automatically"
 	moveOffTheSource     = "next: move them to a gateway you choose: octogee-fleet --env=local user migrate ada --to=<gateway>"
 )
@@ -166,6 +167,42 @@ func TestUserRestoreServingWarnsWhenScheduledWorkWasNotRestored(t *testing.T) {
 	}
 	expectContains(t, run.stdout, "applied: ada returned to serving on shared-a\n"+schedulesNotRestored+"\n")
 	expectContains(t, run.stdout, "octogee-fleet --env=local ops inspect audit-restore")
+}
+
+func TestUserRestoreServingWarnsWhenScheduledWorkMayHaveBeenLeftDisabled(t *testing.T) {
+	run := fleetWith(t, fixture, restoredWith("schedulesRestored", "unknown"), "user", "restore-serving", "ada", "--apply")
+	if run.exit != 0 {
+		t.Fatalf("exit %d: %s", run.exit, run.stderr)
+	}
+	expectContains(t, run.stdout, "applied: ada returned to serving on shared-a\n"+schedulesUnknown+"\n")
+
+	asJSON := fleetWith(t, fixture, restoredWith("schedulesRestored", "unknown"), "user", "restore-serving", "ada", "--apply", "--format=json")
+	if decodeJSON(t, asJSON)["response"].(map[string]any)["schedulesRestored"] != "unknown" {
+		t.Fatalf("stdout %s", asJSON.stdout)
+	}
+	expectContains(t, asJSON.stderr, "warning: "+schedulesUnknown+"\n")
+}
+
+func TestUserRestoreServingWarnsAboutAScheduledWorkAnswerItDoesNotKnow(t *testing.T) {
+	const unread = "ada is serving again, but their scheduled work needs checking: the Admin API answered schedulesRestored="
+	cases := map[string]struct {
+		alter func(answer map[string]any)
+		want  string
+	}{
+		"a new value":   {func(answer map[string]any) { answer["schedulesRestored"] = "partly" }, unread + "partly, which octogee-fleet does not know"},
+		"a number":      {func(answer map[string]any) { answer["schedulesRestored"] = 2 }, unread + "2, which octogee-fleet does not know"},
+		"no value":      {func(answer map[string]any) { delete(answer, "schedulesRestored") }, unread + "null, which octogee-fleet does not know"},
+		"a null answer": {func(answer map[string]any) { answer["schedulesRestored"] = nil }, unread + "null, which octogee-fleet does not know"},
+	}
+	for name, testCase := range cases {
+		t.Run(name, func(t *testing.T) {
+			run := fleetWith(t, fixture, runOptions{alterApplied: testCase.alter}, "user", "restore-serving", "ada", "--apply")
+			if run.exit != 0 {
+				t.Fatalf("exit %d: %s", run.exit, run.stderr)
+			}
+			expectContains(t, run.stdout, "applied: ada returned to serving on shared-a\n"+testCase.want+"\n")
+		})
+	}
 }
 
 func TestUserRestoreServingIsQuietAboutScheduledWorkThatNeedsNothing(t *testing.T) {
