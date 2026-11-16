@@ -18,6 +18,7 @@ var mutatingCommands = [][]string{
 	{"gateway", "add", "--id=shared-c", "--sha=" + sha},
 	{"user", "assign", "alan", "--to=shared-b"},
 	{"user", "migrate", "ada", "--to=shared-b"},
+	{"user", "restore-serving", "ada"},
 	{"user", "add", "lin", "--email=lin@example.com"},
 	{"user", "issue-passwords", "ada"},
 	{"sizing", "set", "team", "--file=testdata/shared-sizing-profile.json"},
@@ -288,6 +289,7 @@ func TestEveryAppliedChangeSaysWhatChangedInsteadOfPrintingTheResponse(t *testin
 		{[]string{"gateway", "resume", "shared-parked"}, []string{"applied: shared-parked set to running", "operation audit-patch"}},
 		{[]string{"user", "assign", "alan", "--to=shared-b"}, []string{"applied: alan assigned to shared-b", "operation audit-assign", "ops inspect audit-assign"}},
 		{[]string{"user", "unassign", "ada"}, []string{"applied: ada unassigned from shared-a", "operation audit-unassign", "ops inspect audit-unassign"}},
+		{[]string{"user", "restore-serving", "ada"}, []string{"applied: ada returned to serving on shared-a", "operation audit-restore", "ops inspect audit-restore"}},
 		{[]string{"user", "delete", "alan"}, []string{"applied: alan scheduled for deletion", "suspension operation op-suspend", "erasure operation op-erase", "ops inspect op-erase"}},
 	}
 	for _, testCase := range cases {
@@ -299,7 +301,7 @@ func TestEveryAppliedChangeSaysWhatChangedInsteadOfPrintingTheResponse(t *testin
 			for _, want := range testCase.want {
 				expectContains(t, run.stdout, want)
 			}
-			for _, raw := range []string{`"updated"`, `"gatewayProfile"`, `"unassigned"`, `"deletionId"`} {
+			for _, raw := range []string{`"updated"`, `"gatewayProfile"`, `"unassigned"`, `"deletionId"`, `"failedMoveId"`, "op-failed-move"} {
 				if strings.Contains(run.stdout, raw) {
 					t.Fatalf("printed the raw response:\n%s", run.stdout)
 				}

@@ -18,6 +18,8 @@ type change struct {
 	done    string
 	notes   []string
 	next    []string
+	// warnings say what an applied change left for the operator to see to.
+	warnings []string
 }
 
 func post(path string, body map[string]any) admin.Request {
@@ -295,6 +297,9 @@ func (i *invocation) printResult(c change, data []byte) {
 	} else {
 		i.line("applied: " + c.done)
 	}
+	for _, warning := range c.warnings {
+		i.warn(warning)
+	}
 	refs := operationIDs(data)
 	for _, ref := range refs {
 		i.detail(ref.label + " " + i.style.bold(ref.id))
@@ -302,16 +307,20 @@ func (i *invocation) printResult(c change, data []byte) {
 	if len(refs) == 0 {
 		i.detail("the Admin API returned no operation id; the change is recorded in the journal")
 	}
-	switch {
-	case len(c.next) > 0:
-		for _, next := range c.next {
-			i.next(next)
-		}
-	case len(refs) == 0:
-		i.next(i.command("ops ls"))
-	default:
-		i.next(i.command("ops inspect " + refs[0].id))
+	if len(c.next) == 0 {
+		i.next(i.journalCommand(refs))
 	}
+	for _, next := range c.next {
+		i.next(next)
+	}
+}
+
+// journalCommand is the command that follows an applied change in the journal.
+func (i *invocation) journalCommand(refs []operationRef) string {
+	if len(refs) == 0 {
+		return i.command("ops ls")
+	}
+	return i.command("ops inspect " + refs[0].id)
 }
 
 func (i *invocation) replaceVM(path, done string) error {

@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/octogee-ai/octogee-fleet/internal/admin"
 	"github.com/octogee-ai/octogee-fleet/internal/terminal"
@@ -53,6 +56,11 @@ var userCommands = []*command{
 		mutating: true,
 		examples: []string{"ada --to=shared-b", "ada --to-isolated=standard --apply"},
 		run:      userMigrate,
+	},
+	{
+		path: words("user restore-serving"), usage: "<user>", argc: 1, summary: "Return a user to serving after a failed move left them quiescing.", mutating: true,
+		examples: []string{"ada", "ada --apply"},
+		run:      userRestoreServing,
 	},
 	{
 		path: words("user unassign"), usage: "<user>", argc: 1, summary: "Remove a user's placement.", mutating: true,
@@ -336,6 +344,92 @@ func (i *invocation) userAndTarget() (placedUser, gatewaySummary, error) {
 		return placedUser{}, gatewaySummary{}, fmt.Errorf("gateway %q is %s, not running", target.GatewayID, target.DesiredStatus)
 	}
 	return user, target, nil
+}
+
+const sourceResumeFailed = "source-resume-failed"
+
+// restoreServingTimeout outlasts the Admin API, which waits up to a minute on
+// the gateway twice before it answers.
+const restoreServingTimeout = 3 * time.Minute
+
+func userRestoreServing(i *invocation) error {
+	user, err := i.namedUser()
+	if err != nil {
+		return err
+	}
+	restored := change{request: post(admin.Path("users", user.ID, "restore-serving"), nil), done: user.Name + " returned to serving"}
+	restored.request.Timeout = restoreServingTimeout
+	if user.AssignedGatewayID != "" {
+		restored.done += " on " + user.AssignedGatewayID
+	}
+	request, data, applied, err := i.send(restored)
+	if err != nil {
+		return i.sourceNotResumed(user, err)
+	}
+	if !applied {
+		return nil
+	}
+	// An answer that cannot be read does not say what became of the scheduled
+	// work, and is warned about as such.
+	var answer map[string]any
+	if json.Unmarshal(data, &answer) != nil {
+		answer = nil
+	}
+	move := "move them to a gateway you choose: " + i.command("user migrate "+i.args[0]+" --to=<gateway>")
+	if warning := scheduledWorkWarning(user.Name, answer["schedulesRestored"]); warning != "" {
+		restored.warnings = append(restored.warnings, warning)
+	}
+	if answer["sourceDraining"] == true {
+		gateway, _ := answer["gatewayId"].(string)
+		restored.warnings = append(restored.warnings, cmp.Or(gateway, "the source gateway")+" is draining, and nothing will move "+user.Name+" off it automatically")
+		restored.next = []string{move, i.journalCommand(operationIDs(data))}
+	}
+	if i.json {
+		for _, warning := range restored.warnings {
+			i.notice(warning)
+		}
+		if len(restored.next) > 0 {
+			i.notice(move)
+		}
+		return i.printJSON(changeDocument{Request: describeRequest(request), Response: rawJSON(data)})
+	}
+	i.printResult(restored, data)
+	return nil
+}
+
+// scheduledWorkWarning says what a repair left to see to in the user's
+// scheduled work, from the schedulesRestored of the Admin API's answer.
+func scheduledWorkWarning(name string, restored any) string {
+	switch restored {
+	case true, "none":
+		return ""
+	case false:
+		return name + " is serving again, but their scheduled work was not restored and needs attention"
+	case "unknown":
+		return name + " is serving again, but their scheduled work may have been left disabled and needs checking"
+	}
+	return fmt.Sprintf("%s is serving again, but their scheduled work needs checking: the Admin API answered schedulesRestored=%s, which octogee-fleet does not know", name, fieldText(restored))
+}
+
+// sourceNotResumed says that the source gateway did not resume the user, when
+// that is why the Admin API failed.
+func (i *invocation) sourceNotResumed(user placedUser, err error) error {
+	var failed *admin.HTTPError
+	if !errors.As(err, &failed) || failed.Code != sourceResumeFailed {
+		return err
+	}
+	cause := "the gateway answered the resume with an error"
+	if failed.Status == http.StatusServiceUnavailable {
+		cause = "the gateway could not be reached"
+	}
+	hints := []string{
+		cause + "; nothing was changed",
+		"once the gateway answers, run this again: " + i.command("user restore-serving "+i.args[0]+" --apply"),
+	}
+	if i.has("idempotency-key") {
+		hints = append(hints, "leave out --idempotency-key or pass a new key: the Admin API answers a repeat of a used key with a 409 and does not ask the gateway again")
+	}
+	return advise(fmt.Errorf("the source gateway could not resume %s (%s): %s", user.Name, failed.Label(), failed.Message), hints...)
 }
 
 func userUnassign(i *invocation) error {
