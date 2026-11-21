@@ -23,6 +23,7 @@ func TestUserMutations(t *testing.T) {
 		{[]string{"user", "restore-serving", "ada"}, adminRequest{Method: http.MethodPost, Path: prefix + "u-ada/restore-serving"}},
 		{[]string{"user", "unassign", "ada"}, adminRequest{Method: http.MethodPost, Path: prefix + "u-ada/unassign"}},
 		{[]string{"user", "replace-vm", "grace"}, adminRequest{Method: http.MethodPost, Path: prefix + "u-grace/vm/replace", Body: map[string]any{}}},
+		{[]string{"user", "archive-home", "ada"}, adminRequest{Method: http.MethodPost, Path: prefix + "u-ada/vm/archive", Body: map[string]any{}}},
 		{[]string{"user", "delete", "alan"}, adminRequest{Method: http.MethodPost, Path: prefix + "u-alan/delete", Body: map[string]any{"eraseNow": false}}},
 		{[]string{"user", "delete", "alan", "--erase-now"}, adminRequest{Method: http.MethodPost, Path: prefix + "u-alan/delete", Body: map[string]any{"eraseNow": true}}},
 	}

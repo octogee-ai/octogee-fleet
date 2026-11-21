@@ -68,6 +68,11 @@ var userCommands = []*command{
 		run:      userUnassign,
 	},
 	{
+		path: words("user archive-home"), usage: "<user>", argc: 1, summary: "Archive an eligible parked computer's home and release its provisioned disks.", mutating: true,
+		examples: []string{"ada", "ada --apply"},
+		run:      userArchiveHome,
+	},
+	{
 		path: words("user replace-vm"), usage: "<user> [--force --accept-boot-data-loss]", argc: 1, summary: "Replace the VM of the user's isolated gateway.",
 		flags:    breakGlassFlags,
 		mutating: true,
@@ -442,6 +447,17 @@ func userUnassign(i *invocation) error {
 		done += " from " + user.AssignedGatewayID
 	}
 	return i.apply(change{request: post(admin.Path("users", user.ID, "unassign"), nil), done: done})
+}
+
+func userArchiveHome(i *invocation) error {
+	user, err := i.namedUser()
+	if err != nil {
+		return err
+	}
+	return i.apply(change{
+		request: post(admin.Path("users", user.ID, "vm", "archive"), map[string]any{}),
+		done:    "home archive queued for " + user.Name,
+	})
 }
 
 func userReplaceVM(i *invocation) error {

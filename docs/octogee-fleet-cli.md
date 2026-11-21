@@ -83,6 +83,7 @@ A shared gateway stays on the build it was added on, and the Admin API refuses `
 | `user migrate <user> --to-isolated=<sizing profile>` | Moves a placed user to an isolated gateway that does not exist yet. The Admin API creates it for the user at the sizing profile and queues the migration. Takes exactly one of `--to` and `--to-isolated`. Once the user has an isolated gateway, move them back to it with `--to=<gateway>`. | `POST /users/<id>/isolated-gateway` |
 | `user restore-serving <user>` | Returns a user to serving on their source gateway after a move failed and its rollback could not resume them. See [below](#returning-a-user-to-serving). | `POST /users/<id>/restore-serving` |
 | `user unassign <user>` | Removes a user's placement | `POST /users/<id>/unassign` |
+| `user archive-home <user>` | Queues a parked computer's home snapshot and disk release after the owner has returned to Shared. Requires server-side enrollment. | `POST /users/<id>/vm/archive` |
 | `user replace-vm <user> [--force --accept-boot-data-loss]` | Replaces the VM of the user's isolated gateway | `POST /users/<id>/vm/replace` |
 | `user delete <user> [--erase-now]` | Schedules the user's deletion; `--erase-now` erases at once | `POST /users/<id>/delete` |
 | `user broker <user>` | Shows the user's model broker usage by window; `--format=json` adds daily usage by model, the token breakdown and recent calls | `GET /users/<id>/broker-diagnostics` |
