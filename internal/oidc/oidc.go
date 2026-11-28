@@ -165,9 +165,10 @@ type Client struct {
 }
 
 type endpoints struct {
-	Issuer string `json:"issuer"`
-	Token  string `json:"token_endpoint"`
-	Device string `json:"device_authorization_endpoint"`
+	Issuer     string `json:"issuer"`
+	Token      string `json:"token_endpoint"`
+	Device     string `json:"device_authorization_endpoint"`
+	Revocation string `json:"revocation_endpoint"`
 }
 
 func (c *Client) discover(ctx context.Context) (endpoints, error) {
@@ -336,4 +337,58 @@ func (c *Client) Refresh(ctx context.Context, session Session) (Session, error) 
 	}
 	next.Binding = session.Binding
 	return next, nil
+}
+
+// Revoke asks the issuer to revoke the session's refresh token (RFC 7009) when
+// the issuer advertises a revocation endpoint.
+func (c *Client) Revoke(ctx context.Context, session Session) error {
+	if session.RefreshToken == "" {
+		return nil
+	}
+	found, err := c.discover(ctx)
+	if err != nil {
+		return err
+	}
+	if found.Revocation == "" {
+		return nil
+	}
+	if err := CheckSecure(found.Revocation); err != nil {
+		return fmt.Errorf("revocation endpoint: %w", err)
+	}
+	form := url.Values{
+		"token":           {session.RefreshToken},
+		"token_type_hint": {"refresh_token"},
+		"client_id":       {c.Settings.ClientID},
+	}
+	if c.Settings.ClientSecret != "" {
+		form.Set("client_secret", c.Settings.ClientSecret)
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(reqCtx, http.MethodPost, found.Revocation, strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("build the revocation request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Accept", "application/json")
+	response, err := c.HTTP.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
+	if err != nil {
+		return fmt.Errorf("read the revocation response: %w", err)
+	}
+	if response.StatusCode >= 200 && response.StatusCode < 300 {
+		return nil
+	}
+	var failure struct {
+		Error            string `json:"error"`
+		ErrorDescription string `json:"error_description"`
+	}
+	if err := json.Unmarshal(data, &failure); err == nil && failure.Error != "" {
+		return fmt.Errorf("%s %s", failure.Error, failure.ErrorDescription)
+	}
+	return fmt.Errorf("the issuer returned %d", response.StatusCode)
 }

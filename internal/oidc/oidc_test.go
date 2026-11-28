@@ -31,14 +31,17 @@ func tokenExpiring(at time.Time) string {
 var freshToken = tokenExpiring(time.Now().Add(time.Hour))
 
 type issuer struct {
-	server    *httptest.Server
-	discovery map[string]any
-	device    map[string]any
-	tokens    []map[string]any
+	server       *httptest.Server
+	discovery    map[string]any
+	device       map[string]any
+	tokens       []map[string]any
+	revokeStatus int
+	revokeBody   map[string]any
 
 	mutex       sync.Mutex
 	deviceForms []url.Values
 	tokenForms  []url.Values
+	revokeForms []url.Values
 }
 
 func newIssuer(t *testing.T) *issuer {
@@ -50,7 +53,9 @@ func newIssuer(t *testing.T) *issuer {
 		"issuer":                        stub.server.URL,
 		"token_endpoint":                stub.server.URL + "/token",
 		"device_authorization_endpoint": stub.server.URL + "/device",
+		"revocation_endpoint":           stub.server.URL + "/revoke",
 	}
+	stub.revokeStatus = http.StatusOK
 	stub.device = map[string]any{
 		"device_code":      "device-1",
 		"user_code":        "ABCD-EFGH",
@@ -84,6 +89,20 @@ func (s *issuer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.tokens = s.tokens[1:]
 		}
 		respond(w, next)
+	case "/revoke":
+		if err := r.ParseForm(); err != nil {
+			panic(err)
+		}
+		s.revokeForms = append(s.revokeForms, r.PostForm)
+		if s.revokeBody != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(s.revokeStatus)
+			if err := json.NewEncoder(w).Encode(s.revokeBody); err != nil {
+				panic(err)
+			}
+			return
+		}
+		w.WriteHeader(s.revokeStatus)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
@@ -304,6 +323,51 @@ func TestRefreshReportsTheIssuersRefusal(t *testing.T) {
 	stub.tokens = []map[string]any{{"error": "invalid_grant", "error_description": "revoked"}}
 	_, err := stub.client(&recorder{}).Refresh(context.Background(), Session{IDToken: "old", RefreshToken: "refresh-1"})
 	expectFailure(t, err, "revoked")
+}
+
+func TestRevokePostsTheRefreshTokenToTheRevocationEndpoint(t *testing.T) {
+	stub := newIssuer(t)
+	client := stub.client(&recorder{})
+	client.Settings.ClientSecret = "installed-app-secret"
+	if err := client.Revoke(context.Background(), Session{IDToken: freshToken, RefreshToken: "refresh-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.revokeForms) != 1 {
+		t.Fatalf("expected 1 revocation request, saw %d", len(stub.revokeForms))
+	}
+	form := stub.revokeForms[0]
+	if form.Get("token") != "refresh-1" || form.Get("token_type_hint") != "refresh_token" || form.Get("client_id") != "fleet-cli" || form.Get("client_secret") != "installed-app-secret" {
+		t.Fatalf("revoke form %v", form)
+	}
+}
+
+func TestRevokeSkipsWhenNoRefreshTokenOrEndpoint(t *testing.T) {
+	stub := newIssuer(t)
+	if err := stub.client(&recorder{}).Revoke(context.Background(), Session{IDToken: freshToken}); err != nil {
+		t.Fatal(err)
+	}
+	delete(stub.discovery, "revocation_endpoint")
+	if err := stub.client(&recorder{}).Revoke(context.Background(), Session{IDToken: freshToken, RefreshToken: "refresh-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.revokeForms) != 0 {
+		t.Fatalf("expected no revocation requests, saw %v", stub.revokeForms)
+	}
+}
+
+func TestRevokeRefusesAPlainTextRevocationEndpoint(t *testing.T) {
+	stub := newIssuer(t)
+	stub.discovery["revocation_endpoint"] = "http://remote.example/revoke"
+	err := stub.client(&recorder{}).Revoke(context.Background(), Session{IDToken: freshToken, RefreshToken: "refresh-1"})
+	expectFailure(t, err, "plain text")
+}
+
+func TestRevokeReportsTheIssuersRefusal(t *testing.T) {
+	stub := newIssuer(t)
+	stub.revokeStatus = http.StatusBadRequest
+	stub.revokeBody = map[string]any{"error": "invalid_token", "error_description": "already revoked"}
+	err := stub.client(&recorder{}).Revoke(context.Background(), Session{IDToken: freshToken, RefreshToken: "refresh-1"})
+	expectFailure(t, err, "already revoked")
 }
 
 func TestSessionValidity(t *testing.T) {

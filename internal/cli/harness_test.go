@@ -108,6 +108,7 @@ type runOptions struct {
 	rejectWith       int
 	session          sessionState
 	refreshFails     bool
+	revokeFails      bool
 	tokenCommand     []string
 	redirectTo       string
 	defaultHTTP      bool
@@ -676,6 +677,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 type issuerStub struct {
 	url          string
 	refreshFails bool
+	revokeFails  bool
 
 	mutex sync.Mutex
 	forms []url.Values
@@ -689,6 +691,7 @@ func (s *issuerStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"issuer":                        s.url,
 			"token_endpoint":                s.url + "/token",
 			"device_authorization_endpoint": s.url + "/device",
+			"revocation_endpoint":           s.url + "/revoke",
 		})
 		return
 	}
@@ -697,6 +700,12 @@ func (s *issuerStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	s.forms = append(s.forms, r.PostForm)
 	switch {
+	case r.URL.Path == "/revoke":
+		if s.revokeFails {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "temporarily_unavailable", "error_description": "issuer down"})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
 	case r.URL.Path == "/device":
 		writeJSON(w, http.StatusOK, map[string]any{
 			"device_code":      "device-1",
@@ -738,7 +747,7 @@ func execute(t *testing.T, fixture fleetFixture, options runOptions, argv []stri
 	stub := &adminStub{fixture: fixture, options: options}
 	server := httptest.NewServer(stub)
 	defer server.Close()
-	issuer := &issuerStub{refreshFails: options.refreshFails}
+	issuer := &issuerStub{refreshFails: options.refreshFails, revokeFails: options.revokeFails}
 	issuerServer := httptest.NewServer(issuer)
 	defer issuerServer.Close()
 	issuer.url = issuerServer.URL
