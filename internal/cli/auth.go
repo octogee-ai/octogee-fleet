@@ -62,6 +62,14 @@ func logout(i *invocation) error {
 	if err != nil {
 		return err
 	}
+	if i.environment.OIDC != nil {
+		session, found, loadErr := store.Load(i.name)
+		if loadErr == nil && found && session.Binding == sessionBinding(i.environment) && session.RefreshToken != "" {
+			if revokeErr := oidcClient(i.environment, i.runtime).Revoke(i.ctx, session); revokeErr != nil {
+				i.notice(fmt.Sprintf("could not revoke the refresh token at the issuer (%v); revoke it in your account settings", revokeErr))
+			}
+		}
+	}
 	if err := store.Delete(i.name); err != nil {
 		return err
 	}

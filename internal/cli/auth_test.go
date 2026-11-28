@@ -50,11 +50,26 @@ func TestSigningInSavesThePrivateSessionAndNamesTheOperator(t *testing.T) {
 	}
 }
 
-func TestSigningOutForgetsTheSession(t *testing.T) {
+func TestSigningOutRevokesAndForgetsTheSession(t *testing.T) {
 	run := fleet(t, "logout")
 	if run.exit != 0 {
 		t.Fatalf("exit %d: %s", run.exit, run.stderr)
 	}
+	if len(run.issuerForms) != 1 || run.issuerForms[0].Get("token") != "refresh-1" {
+		t.Fatalf("issuer saw %v", run.issuerForms)
+	}
+	if _, err := os.Stat(run.sessionPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("session still present: %v", err)
+	}
+}
+
+func TestSigningOutStillForgetsTheSessionWhenRevocationFails(t *testing.T) {
+	run := fleetWith(t, fixture, runOptions{revokeFails: true}, "logout")
+	if run.exit != 0 {
+		t.Fatalf("exit %d: %s", run.exit, run.stderr)
+	}
+	expectContains(t, run.stderr, "could not revoke")
+	expectContains(t, run.stderr, "account settings")
 	if _, err := os.Stat(run.sessionPath); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("session still present: %v", err)
 	}
